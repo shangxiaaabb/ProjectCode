@@ -8,18 +8,23 @@ on:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    permissions: # 新增权限设置
+      contents: write
+    
     steps:
-      # 检出目标仓库
+      # 检出目标仓库（使用 PAT）
       - name: Checkout target repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # 获取完整历史以便合并
+          fetch-depth: 0
+          token: ${{ secrets.ACCESS_TOKEN }} # 必须使用具有写入权限的 PAT
 
       # 配置 Git 用户信息
       - name: Configure Git
         run: |
           git config --global user.name "GitHub Action"
           git config --global user.email "action@github.com"
+          git config --global pull.rebase true # 设置 rebase 方式拉取
 
       # 获取源仓库的最新提交哈希
       - name: Get source repository latest commit
@@ -35,29 +40,43 @@ jobs:
             LAST_COMMIT=$(cat .github/last_commit.txt)
             CURRENT_COMMIT=$(cat current_commit.txt)
             if [ "$LAST_COMMIT" != "$CURRENT_COMMIT" ]; then
-              echo "New changes detected in source repository."
               echo "has_changes=true" >> $GITHUB_OUTPUT
+              echo "New changes detected in source repository."
             else
-              echo "No changes detected in source repository."
               echo "has_changes=false" >> $GITHUB_OUTPUT
+              echo "No changes detected in source repository."
             fi
           else
-            echo "No last_commit.txt found, treating as first sync."
             echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "No last_commit.txt found, treating as first sync."
           fi
 
-      # 拉取源仓库的 code/Python 目录（仅当有更新时）
-      - name: Pull Python code from source repository
+      # 同步 Python 代码（仅当有更新时）
+      - name: Sync Python Code
         if: steps.check_updates.outputs.has_changes == 'true'
         run: |
+          # 添加源仓库并获取更新
           git remote add source https://github.com/Big-Yellow-J/Big-Yellow-J.github.io.git
           git fetch source
-          git checkout main # 目标仓库主分支（根据需要改为你的分支名）
-          rm -rf code/Python/* # 清空目标目录
-          git checkout source/master -- code/Python/ # 拉取源仓库 master 分支的 code/Python
+          
+          # 确保本地分支是最新状态
+          git pull origin main
+          
+          # 清空并重建目标目录
+          rm -rf code/Python
+          mkdir -p code/Python
+          
+          # 检出源仓库的 Python 代码
+          git checkout source/master -- code/Python/
+          
+          # 提交更改
           git add code/Python/
-          # 更新 last_commit.txt
           cat current_commit.txt > .github/last_commit.txt
           git add .github/last_commit.txt
-          git commit -m "Auto-pull Python code from Big-Yellow-J/Big-Yellow-J.github.io" || echo "No changes to commit"
-          git push origin main --force
+          
+          if ! git diff-index --quiet HEAD --; then
+            git commit -m "Auto-sync Python code from Big-Yellow-J/Big-Yellow-J.github.io (commit $(cat current_commit.txt))"
+            git push origin main
+          else
+            echo "No changes to commit."
+          fi
