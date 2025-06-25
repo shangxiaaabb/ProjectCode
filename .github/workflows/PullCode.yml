@@ -2,8 +2,8 @@ name: AutoCodeSync
 
 on:
   schedule:
-    - cron: '0 0 * * *' # 每天 UTC 时间 00:00 运行（香港时间 08:00）
-  workflow_dispatch: # 支持手动触发
+    - cron: '0 0 * * *'
+  workflow_dispatch:
 
 jobs:
   sync:
@@ -13,14 +13,15 @@ jobs:
       - name: Checkout target repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # 获取完整历史以便合并
-          token: ${{ secrets.ACCESS_TOKEN }} # 使用 PAT 检出
+          fetch-depth: 0
+          token: ${{ secrets.ACCESS_TOKEN }}
 
       # 配置 Git 用户信息
       - name: Configure Git
         run: |
           git config --global user.name "GitHub Action"
           git config --global user.email "action@github.com"
+          git config --global pull.rebase true  # 设置 rebase 方式拉取
 
       # 获取源仓库的最新提交哈希
       - name: Get source repository latest commit
@@ -47,15 +48,18 @@ jobs:
             echo "has_changes=true" >> $GITHUB_OUTPUT
           fi
 
-      # 拉取源仓库 code/Python 下的所有子文件夹到根目录
-      - name: Pull Python folders to root
+      # 同步 Python 文件夹到根目录
+      - name: Sync Python folders to root
         if: steps.check_updates.outputs.has_changes == 'true'
         run: |
+          # 添加源仓库
           git remote add source https://github.com/Big-Yellow-J/Big-Yellow-J.github.io.git
           git fetch source
-          git checkout main
-
-          # 获取 code/Python 下的所有子文件夹
+          
+          # 确保本地分支是最新的
+          git pull origin main
+          
+          # 获取 code/Python 下的子文件夹
           SUBFOLDERS=$(git ls-tree -d --name-only source/master code/Python 2>/dev/null || echo "")
           
           if [ -z "$SUBFOLDERS" ]; then
@@ -63,23 +67,37 @@ jobs:
             exit 0
           fi
 
-          # 清空目标仓库中对应的文件夹（如果存在）
+          # 处理每个子文件夹
           for folder in $SUBFOLDERS; do
             folder_name=$(basename "$folder")
             echo "Processing folder: $folder_name"
-            rm -rf "$folder_name"  # 删除根目录下的同名文件夹
+            
+            # 删除目标位置可能存在的旧文件夹
+            rm -rf "$folder_name"
+            
+            # 检出源仓库的文件夹
             git checkout source/master -- "code/Python/$folder_name"
-            mv "code/Python/$folder_name" ./ || echo "Failed to move $folder_name"
+            
+            # 移动到根目录
+            mv "code/Python/$folder_name" ./
           done
 
-          # 清理残留的 code/Python 目录
+          # 清理残留目录
           rm -rf code
 
           # 更新 last_commit.txt
           mkdir -p .github
           cat current_commit.txt > .github/last_commit.txt
+          
+          # 添加所有更改
           git add .
-          git commit -m "Auto-sync Python folders to root from source (commit $(cat current_commit.txt))" || echo "No changes to commit"
+          
+          # 提交更改（如果有）
+          if git diff-index --quiet HEAD --; then
+            echo "No changes to commit."
+          else
+            git commit -m "Auto-sync Python folders to root from source (commit $(cat current_commit.txt))"
+          fi
 
       # 推送更改到目标仓库
       - name: Push changes
@@ -87,5 +105,10 @@ jobs:
         env:
           ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
-          git remote set-url origin https://x-access-token:${ACCESS_TOKEN}@github.com/shangxiaaabb/ProjectCode.git
+          # 再次拉取确保是最新状态
+          git pull origin main
+          
+          # 强制推送（谨慎使用）
           git push origin main
+          # 如果仍然有问题，可以使用强制推送（取消下面一行的注释）
+          # git push origin main --force
