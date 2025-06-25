@@ -1,4 +1,4 @@
-name: CodeSyncBlog
+name: Auto Pull Python Code from Big-Yellow-J
 
 on:
   schedule:
@@ -69,5 +69,5 @@ jobs:
         env:
           ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
-          git remote set-url origin https://x-access-token:${ACCESS_TOKEN}@github.com/your-username/ProjectCode.git
+          git remote set-url origin https://x-access-token:${ACCESS_TOKEN}@github.com/shangxiaaabb/ProjectCode.git
           git push origin main
