@@ -2,12 +2,8 @@ name: AutoCodeSync
 
 on:
   schedule:
-    - cron: '0 0 * * *' # 每天 UTC 午夜运行
-  workflow_dispatch: # 允许手动触发
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+    - cron: '0 0 * * *' # 每天 UTC 时间 00:00 运行（香港时间 08:00）
+  workflow_dispatch: # 支持手动触发
 
 jobs:
   sync:
@@ -17,34 +13,22 @@ jobs:
       - name: Checkout target repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-          token: ${{ secrets.ACCESS_TOKEN }}
+          fetch-depth: 0 # 获取完整历史以便合并
+          token: ${{ secrets.ACCESS_TOKEN }} # 使用 PAT 检出
 
-      # 配置 Git
+      # 配置 Git 用户信息
       - name: Configure Git
         run: |
           git config --global user.name "GitHub Action"
           git config --global user.email "action@github.com"
 
-      # 获取源仓库最新提交
+      # 获取源仓库的最新提交哈希
       - name: Get source repository latest commit
         run: |
-          echo "Fetching commit from source repository..."
-          git ls-remote https://github.com/Big-Yellow-J/Big-Yellow-J.github.io.git master > ls_remote_output.txt 2>&1
-          if [ $? -ne 0 ]; then
-            echo "Error: git ls-remote failed. Check repository URL or branch."
-            cat ls_remote_output.txt
-            exit 1
-          fi
-          awk '/refs\/heads\/master/ {print $1}' ls_remote_output.txt > current_commit.txt
-          if [ ! -s current_commit.txt ]; then
-            echo "Error: No commit found for master branch. Check if 'master' branch exists."
-            cat ls_remote_output.txt
-            exit 1
-          fi
+          git ls-remote https://github.com/Big-Yellow-J/Big-Yellow-J.github.io.git master | awk '{print $1}' > current_commit.txt
           echo "Current source commit: $(cat current_commit.txt)"
 
-      # 检查更新
+      # 检查是否有更新
       - name: Check for updates
         id: check_updates
         run: |
@@ -52,68 +36,54 @@ jobs:
             LAST_COMMIT=$(cat .github/last_commit.txt)
             CURRENT_COMMIT=$(cat current_commit.txt)
             if [ "$LAST_COMMIT" != "$CURRENT_COMMIT" ]; then
+              echo "New changes detected in source repository."
               echo "has_changes=true" >> $GITHUB_OUTPUT
             else
+              echo "No changes detected in source repository."
               echo "has_changes=false" >> $GITHUB_OUTPUT
             fi
           else
+            echo "No last_commit.txt found, treating as first sync."
             echo "has_changes=true" >> $GITHUB_OUTPUT
           fi
-          echo "has_changes: $(cat $GITHUB_OUTPUT | grep has_changes)"
 
-      # 同步 code/Python 目录
-      - name: Sync code/Python directory
+      # 拉取源仓库 code/Python 下的所有子文件夹
+      - name: Pull Python code folders from source repository
         if: steps.check_updates.outputs.has_changes == 'true'
         run: |
-          # 添加源仓库并获取
-          git remote add source https://github.com/Big-Yellow-J/Big-Yellow-J.github.io.git || true
+          git remote add source https://github.com/Big-Yellow-J/Big-Yellow-J.github.io.git
           git fetch source
-
-          # 重置到远程 main 分支
-          git checkout main
-          git fetch origin
-          git reset --hard origin/main
-
-          # 调试：列出源仓库 code/Python 内容
-          echo "Listing code/Python contents in source/master:"
-          git ls-tree -r source/master code/Python || echo "No code/Python directory found"
-
-          # 检查 code/Python 是否存在
-          if ! git ls-tree source/master code/Python > /dev/null 2>&1; then
-            echo "Error: code/Python directory does not exist in source/master."
-            exit 1
+          git checkout main # 目标仓库主分支（根据需要改为你的分支名）
+          # 获取 code/Python 下的子文件夹列表
+          SUBFOLDERS=$(git ls-tree -d source/master code/Python | awk '{print $NF}')
+          if [ -z "$SUBFOLDERS" ]; then
+            echo "No subfolders found in code/Python."
+            exit 0
           fi
-
-          # 清空目标仓库根目录（保留 .git 和 .github）
-          find . -maxdepth 1 -not -name '.' -not -name '..' -not -name '.git' -not -name '.github' -exec rm -rf {} \;
-
-          # 同步 code/Python 内容到根目录
-          git checkout source/master -- code/Python
-          mv code/Python/* ./ 2>/dev/null || echo "No files to move from code/Python"
-          rm -rf code
-
-          # 更新提交记录
-          mkdir -p .github
-          cat current_commit.txt > .github/last_commit.txt
+          # 强制清空目标仓库中对应的子文件夹（以源为主）
+          for folder in $SUBFOLDERS; do
+            rm -rf "$(basename $folder)"/*
+          done
+          # 拉取所有子文件夹
+          git checkout source/master -- code/Python/*/
+          # 移动子文件夹到根目录
+          for folder in $SUBFOLDERS; do
+            mv "code/Python/$(basename $folder)" "$(basename $folder)" || echo "Failed to move $folder, may already exist"
+          done
+          # 删除 code/Python 目录（如果不需要）
+          rm -rf code/Python
           git add .
+          # 更新 last_commit.txt
+          cat current_commit.txt > .github/last_commit.txt
+          git add .github/last_commit.txt
+          git commit -m "Auto-pull Python code folders from Big-Yellow-J/Big-Yellow-J.github.io (source overrides conflicts)" || echo "No changes to commit"
 
-          # 调试：检查更改状态
-          echo "Git status before commit:"
-          git status
-
-          # 强制提交
-          echo "Committing changes..."
-          git commit -m "Auto-sync code/Python from source (commit $(cat current_commit.txt))" || echo "No changes to commit"
-
-      # 强制推送
-      - name: Force push changes
+      # 推送更改到目标仓库
+      - name: Push changes
         if: steps.check_updates.outputs.has_changes == 'true'
         env:
           ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           git remote set-url origin https://x-access-token:${ACCESS_TOKEN}@github.com/shangxiaaabb/ProjectCode.git
-          git fetch origin
-          echo "Before push - Local HEAD: $(git rev-parse HEAD)"
-          echo "Before push - Remote origin/main: $(git rev-parse origin/main)"
+
           git push origin main --force
-          echo "Push completed. Remote HEAD: $(git ls-remote origin main | awk '{print $1}')"
