@@ -47,36 +47,39 @@ jobs:
             echo "has_changes=true" >> $GITHUB_OUTPUT
           fi
 
-      # 拉取源仓库 code/Python 下的所有子文件夹
-      - name: Pull Python code folders from source repository
+      # 拉取源仓库 code/Python 下的所有子文件夹到根目录
+      - name: Pull Python folders to root
         if: steps.check_updates.outputs.has_changes == 'true'
         run: |
           git remote add source https://github.com/Big-Yellow-J/Big-Yellow-J.github.io.git
           git fetch source
-          git checkout main # 目标仓库主分支（根据需要改为你的分支名）
-          # 获取 code/Python 下的子文件夹列表
-          SUBFOLDERS=$(git ls-tree -d source/master code/Python | awk '{print $NF}')
+          git checkout main
+
+          # 获取 code/Python 下的所有子文件夹
+          SUBFOLDERS=$(git ls-tree -d --name-only source/master code/Python 2>/dev/null || echo "")
+          
           if [ -z "$SUBFOLDERS" ]; then
             echo "No subfolders found in code/Python."
             exit 0
           fi
-          # 强制清空目标仓库中对应的子文件夹（以源为主）
+
+          # 清空目标仓库中对应的文件夹（如果存在）
           for folder in $SUBFOLDERS; do
-            rm -rf "$(basename $folder)"/*
+            folder_name=$(basename "$folder")
+            echo "Processing folder: $folder_name"
+            rm -rf "$folder_name"  # 删除根目录下的同名文件夹
+            git checkout source/master -- "code/Python/$folder_name"
+            mv "code/Python/$folder_name" ./ || echo "Failed to move $folder_name"
           done
-          # 拉取所有子文件夹
-          git checkout source/master -- code/Python/*/
-          # 移动子文件夹到根目录
-          for folder in $SUBFOLDERS; do
-            mv "code/Python/$(basename $folder)" "$(basename $folder)" || echo "Failed to move $folder, may already exist"
-          done
-          # 删除 code/Python 目录（如果不需要）
-          rm -rf code/Python
-          git add .
+
+          # 清理残留的 code/Python 目录
+          rm -rf code
+
           # 更新 last_commit.txt
+          mkdir -p .github
           cat current_commit.txt > .github/last_commit.txt
-          git add .github/last_commit.txt
-          git commit -m "Auto-pull Python code folders from Big-Yellow-J/Big-Yellow-J.github.io (source overrides conflicts)" || echo "No changes to commit"
+          git add .
+          git commit -m "Auto-sync Python folders to root from source (commit $(cat current_commit.txt))" || echo "No changes to commit"
 
       # 推送更改到目标仓库
       - name: Push changes
