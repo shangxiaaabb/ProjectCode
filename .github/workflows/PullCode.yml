@@ -5,6 +5,11 @@ on:
     - cron: '0 0 * * *' # 每天 UTC 午夜运行
   workflow_dispatch: # 允许手动触发
 
+# 防止并发运行
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -13,7 +18,7 @@ jobs:
       - name: Checkout target repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # 获取完整历史记录
+          fetch-depth: 0
           token: ${{ secrets.ACCESS_TOKEN }}
 
       # 配置 Git
@@ -21,8 +26,6 @@ jobs:
         run: |
           git config --global user.name "GitHub Action"
           git config --global user.email "action@github.com"
-          git config --global pull.rebase true
-          git config --global push.default current
 
       # 获取源仓库最新提交
       - name: Get source repository latest commit
@@ -38,14 +41,11 @@ jobs:
             LAST_COMMIT=$(cat .github/last_commit.txt)
             CURRENT_COMMIT=$(cat current_commit.txt)
             if [ "$LAST_COMMIT" != "$CURRENT_COMMIT" ]; then
-              echo "New changes detected in source repository."
               echo "has_changes=true" >> $GITHUB_OUTPUT
             else
-              echo "No changes detected in source repository."
               echo "has_changes=false" >> $GITHUB_OUTPUT
             fi
           else
-            echo "No last_commit.txt found, treating as first sync."
             echo "has_changes=true" >> $GITHUB_OUTPUT
           fi
 
@@ -53,52 +53,44 @@ jobs:
       - name: Sync Python folders
         if: steps.check_updates.outputs.has_changes == 'true'
         run: |
-          # 添加源仓库
+          # 添加源仓库并获取
           git remote add source https://github.com/Big-Yellow-J/Big-Yellow-J.github.io.git || true
           git fetch source
 
-          # 确保在 main 分支上并与远程同步
+          # 重置到远程 main 分支
           git checkout main
           git fetch origin
           git reset --hard origin/main
 
-          # 调试：显示当前分支和提交状态
-          echo "Current branch: $(git rev-parse --abbrev-ref HEAD)"
-          echo "Current HEAD commit: $(git rev-parse HEAD)"
-          echo "Remote origin/main commit: $(git rev-parse origin/main)"
+          # 调试信息
+          echo "Before sync - Local HEAD: $(git rev-parse HEAD)"
+          echo "Before sync - Remote origin/main: $(git rev-parse origin/main)"
 
           # 获取源仓库 code/Python 下的子文件夹
           SUBFOLDERS=$(git ls-tree -d --name-only source/master code/Python 2>/dev/null || echo "")
-          
           if [ -z "$SUBFOLDERS" ]; then
             echo "No subfolders found in code/Python."
             exit 0
           fi
 
-          # 同步每个文件夹
+          # 同步文件夹
           for folder in $SUBFOLDERS; do
             folder_name=$(basename "$folder")
             echo "Syncing folder: $folder_name"
-            
-            # 删除目标位置旧文件夹
             rm -rf "$folder_name"
-            
-            # 检出源文件夹
             git checkout source/master -- "code/Python/$folder_name"
-            
-            # 移动到根目录
             mv "code/Python/$folder_name" ./
           done
 
-          # 清理残留
+          # 清理
           rm -rf code
 
           # 更新提交记录
           mkdir -p .github
           cat current_commit.txt > .github/last_commit.txt
-          
-          # 提交更改
           git add .
+
+          # 提交更改
           if ! git diff-index --quiet HEAD --; then
             git commit -m "Auto-sync from source (commit $(cat current_commit.txt))"
           else
@@ -106,22 +98,15 @@ jobs:
             exit 0
           fi
 
-      # 推送更改
-      - name: Push changes
+      # 强制推送
+      - name: Force push changes
         if: steps.check_updates.outputs.has_changes == 'true'
         env:
           ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
-          # 设置远程 URL
           git remote set-url origin https://x-access-token:${ACCESS_TOKEN}@github.com/shangxiaaabb/ProjectCode.git
-          
-          # 再次确保远程分支是最新的
           git fetch origin
           echo "Before push - Local HEAD: $(git rev-parse HEAD)"
           echo "Before push - Remote origin/main: $(git rev-parse origin/main)"
-          
-          # 强制推送
           git push origin main --force
-          
-          # 验证推送结果
           echo "Push completed. Remote HEAD: $(git ls-remote origin main | awk '{print $1}')"
