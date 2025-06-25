@@ -5,7 +5,6 @@ on:
     - cron: '0 0 * * *' # 每天 UTC 午夜运行
   workflow_dispatch: # 允许手动触发
 
-# 防止并发运行
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -31,6 +30,10 @@ jobs:
       - name: Get source repository latest commit
         run: |
           git ls-remote https://github.com/Big-Yellow-J/Big-Yellow-J.github.io.git master | awk '{print $1}' > current_commit.txt
+          if [ ! -s current_commit.txt ]; then
+            echo "Error: Failed to fetch source commit. Check if 'master' branch exists."
+            exit 1
+          fi
           echo "Current source commit: $(cat current_commit.txt)"
 
       # 检查更新
@@ -48,6 +51,7 @@ jobs:
           else
             echo "has_changes=true" >> $GITHUB_OUTPUT
           fi
+          echo "has_changes: $(cat $GITHUB_OUTPUT | grep has_changes)"
 
       # 同步文件
       - name: Sync Python folders
@@ -66,8 +70,13 @@ jobs:
           echo "Before sync - Local HEAD: $(git rev-parse HEAD)"
           echo "Before sync - Remote origin/main: $(git rev-parse origin/main)"
 
+          # 调试：列出源仓库 code/Python 下的内容
+          echo "Listing code/Python contents in source/master:"
+          git ls-tree source/master code/Python
+
           # 获取源仓库 code/Python 下的子文件夹
-          SUBFOLDERS=$(git ls-tree -d --name-only source/master code/Python 2>/dev/null || echo "")
+          SUBFOLDERS=$(git ls-tree -d -r source/master code/Python | grep '^d' | awk '{print $4}' | grep -E '^code/Python/[^/]+$' | sed 's|^code/Python/||' || echo "")
+          echo "Subfolders: $SUBFOLDERS"
           if [ -z "$SUBFOLDERS" ]; then
             echo "No subfolders found in code/Python."
             exit 0
@@ -75,11 +84,13 @@ jobs:
 
           # 同步文件夹
           for folder in $SUBFOLDERS; do
-            folder_name=$(basename "$folder")
-            echo "Syncing folder: $folder_name"
-            rm -rf "$folder_name"
-            git checkout source/master -- "code/Python/$folder_name"
-            mv "code/Python/$folder_name" ./
+            echo "Syncing folder: $folder}"
+            # 删除目标目录
+            rm -rf "$folder"
+            # 检出源文件夹
+            git checkout source/master -- "code/Python/$folder"
+            # 移动到根目录
+            mv "code/Python/$folder" ./
           done
 
           # 清理
@@ -90,8 +101,11 @@ jobs:
           cat current_commit.txt > .github/last_commit.txt
           git add .
 
+          # 调试：检查更改状态
+          git status
           # 提交更改
           if ! git diff-index --quiet HEAD --; then
+            echo "Changes detected, committing..."
             git commit -m "Auto-sync from source (commit $(cat current_commit.txt))"
           else
             echo "No changes to commit."
