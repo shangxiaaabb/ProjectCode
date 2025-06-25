@@ -29,9 +29,17 @@ jobs:
       # 获取源仓库最新提交
       - name: Get source repository latest commit
         run: |
-          git ls-remote https://github.com/Big-Yellow-J/Big-Yellow-J.github.io.git master | awk '{print $1}' > current_commit.txt
+          echo "Fetching commit from source repository..."
+          git ls-remote https://github.com/Big-Yellow-J/Big-Yellow-J.github.io.git master > ls_remote_output.txt 2>&1
+          if [ $? -ne 0 ]; then
+            echo "Error: git ls-remote failed. Check repository URL or branch."
+            cat ls_remote_output.txt
+            exit 1
+          fi
+          awk '/refs\/heads\/master/ {print $1}' ls_remote_output.txt > current_commit.txt
           if [ ! -s current_commit.txt ]; then
-            echo "Error: Failed to fetch source commit. Check if 'master' branch exists."
+            echo "Error: No commit found for master branch. Check if 'master' branch exists."
+            cat ls_remote_output.txt
             exit 1
           fi
           echo "Current source commit: $(cat current_commit.txt)"
